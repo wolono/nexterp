@@ -1,0 +1,74 @@
+name: 自动生成更新日志（无标签依赖）
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  generate-changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 显式声明仓库写入权限
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # 获取完整提交历史
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true  # 保持凭据有效性
+
+      - name: 生成变更日志
+        id: generate
+        run: |
+          # 获取本次推送的提交范围
+          BEFORE_SHA="${{ github.event.before}}"
+          CURRENT_SHA="${{ github.sha }}"
+
+          # 处理首次提交或强制推送的情况
+          if [ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]; then
+            echo "检测到首次提交或强制推送，获取全部提交"
+            COMMIT_RANGE="HEAD"
+          else
+            COMMIT_RANGE="$BEFORE_SHA..$CURRENT_SHA"
+          fi
+
+          # 生成日期标记
+          DATE=$(date +"%Y-%m-%d %H:%M")
+
+          # 生成变更内容（Markdown格式）
+          echo "开始生成变更日志..."
+          CHANGES=$(git log --no-merges --pretty=format:"- %s (%h)" $COMMIT_RANGE 2>&1)
+
+          # 处理无新提交的情况
+          if [ -z "$CHANGES" ]; then
+            echo "::warning::本次推送没有新提交"
+            echo "skip_generation=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 构建日志内容
+          cat << EOF > changelog.md
+          ## 更新日志 [$DATE]
+
+          ### 提交记录
+          $CHANGES
+
+          [查看差异对比](https://github.com/${{ github.repository }}/compare/$BEFORE_SHA...$CURRENT_SHA)
+          EOF
+
+          echo "变更日志生成成功！"
+
+      - name: 提交变更
+        if: steps.generate.outputs.skip_generation != 'true'
+        run: |
+          # 配置Git身份
+          git config user.name "自动日志机器人"
+          git config user.email "ci@example.com"
+
+          # 添加并提交文件
+          git add changelog.md
+          git commit -m "📝 自动更新变更日志 [skip ci]"
+
+          # 强制推送更新（处理历史重写情况）
+          git push --force-with-lease origin HEAD:main
